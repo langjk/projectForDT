@@ -33,11 +33,10 @@ class ModbusScannerThread(QThread):
     result_signal = pyqtSignal(str)  # 用于传递设备信息
     device_data_signal = pyqtSignal(int, int, int)  # 地址, 设定流量, 显示流量
 
-    def __init__(self, port_name, lock):
+    def __init__(self, serial_manager, lock):
         super().__init__()
-        self.port_name = port_name
+        self.serial_manager = serial_manager  # 保存传递进来的 serial_manager
         self.running = True
-        self.ser = None
         self.lock = lock
 
     def query_device(self, address):
@@ -47,8 +46,8 @@ class ModbusScannerThread(QThread):
         def send_and_receive(data):
             data += calculate_checksum(data)
             with self.lock:
-                self.ser.write(data)
-                response = self.ser.read(7)
+                self.serial_manager.send_data(data)
+                response = self.serial_manager.receive_data(7)
             if len(response) == 7 and response[-2:] == calculate_checksum(response[:-2]):
                 return int.from_bytes(response[3:5], byteorder='big')
             return None
@@ -59,7 +58,6 @@ class ModbusScannerThread(QThread):
 
     def run(self):
         try:
-            self.ser = serial.Serial(self.port_name, 9600, timeout=0.2)
             online_devices = []
 
             for address in range(0x00, 0x10):
@@ -70,8 +68,8 @@ class ModbusScannerThread(QThread):
                 data = bytearray([address, 0x03, 0x00, 0x30, 0x00, 0x01])
                 data += calculate_checksum(data)
                 with self.lock:
-                    self.ser.write(data)
-                    response = self.ser.read(7)
+                    self.serial_manager.send_data(data)
+                    response = self.serial_manager.receive_data(7)
                 if len(response) == 7 and response[-2:] == calculate_checksum(response[:-2]):
                     # 设备在线，记录地址
                     online_devices.append(address)
@@ -80,8 +78,8 @@ class ModbusScannerThread(QThread):
                     unit_data = bytearray([address, 0x01, 0x00, 0x06, 0x00, 0x01])
                     unit_data += calculate_checksum(unit_data)
                     with self.lock:
-                        self.ser.write(unit_data)
-                        unit_response = self.ser.read(6)
+                        self.serial_manager.send_data(unit_data)
+                        unit_response = self.serial_manager.receive_data(7)
 
                     if len(unit_response) == 6 and unit_response[-2:] == calculate_checksum(unit_response[:-2]):
                         # 解析单位和量程数据
@@ -101,13 +99,14 @@ class ModbusScannerThread(QThread):
                         self.device_data_signal.emit(address, set_flow, display_flow)
                 self.msleep(300)
         except Exception as e:
-            self.result_signal.emit(f"错误: {str(e)}")
+            self.result_signal.emit(f"错误1: {str(e)}")
 
 
 class ModbusScannerApp(QMainWindow):
     device_found_signal = pyqtSignal(str)  # 信号，用于传递设备信息
-    def __init__(self):
+    def __init__(self, serial_manager):
         super().__init__()
+        self.serial_manager = serial_manager
         self.setWindowTitle("ModBus 扫描工具")
         self.resize(1200, 600)
 
@@ -129,15 +128,9 @@ class ModbusScannerApp(QMainWindow):
         scroll_area.setWidgetResizable(True)
         self.left_layout.addWidget(scroll_area)
 
-        # 串口选择和操作按钮
-        self.port_combo = QComboBox()
-        refresh_button = QPushButton("刷新串口列表")
-        refresh_button.clicked.connect(self.update_ports)
         scan_button = QPushButton("开始扫描")
         scan_button.clicked.connect(self.start_scan)
         self.left_layout.addWidget(QLabel("选择串口:"))
-        self.left_layout.addWidget(self.port_combo)
-        self.left_layout.addWidget(refresh_button)
         self.left_layout.addWidget(scan_button)
 
         # 扫描结果
@@ -200,29 +193,19 @@ class ModbusScannerApp(QMainWindow):
         main_splitter.setStretchFactor(0, 1)  # 左侧占 1 份
         main_splitter.setStretchFactor(1, 3)  # 右侧占 3 份
 
-        # 加载串口列表
-        self.update_ports()
-
-    def update_ports(self):
-        """
-        更新可用串口列表
-        """
-        self.port_combo.clear()
-        ports = serial.tools.list_ports.comports()
-        for port in ports:
-            self.port_combo.addItem(port.device)
 
     def start_scan(self):
-        selected_port = self.port_combo.currentText()
-        if not selected_port:
-            self.result_text.append("请先选择一个串口！")
+        if not self.serial_manager.get_connection_status():  # 检查是否已连接
+            print(self.serial_manager.get_connection_status())
+            self.result_text.append("请先连接串口！")
             return
 
-        self.scan_thread = ModbusScannerThread(selected_port, self.lock)
+        # 直接调用扫描线程
+        self.scan_thread = ModbusScannerThread(self.serial_manager, self.lock)
         self.scan_thread.result_signal.connect(self.display_result)
         self.scan_thread.device_data_signal.connect(self.update_device_data)
         self.scan_thread.start()
-
+    
     def display_result(self, result):
         """
         接收线程信号并更新 UI
@@ -296,7 +279,7 @@ class ModbusScannerApp(QMainWindow):
                 bytearray([address, 0x06, 0x00, 0x11]) + set_value.to_bytes(2, byteorder='big'))
 
             with self.lock:
-                self.scan_thread.ser.write(command)
+                self.scan_thread.serial_manager.send_data(command)
 
             self.result_text.append(f"地址 {address:02X}: 已发送设定流量 {percentage}%")
         except Exception as e:
