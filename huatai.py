@@ -7,6 +7,8 @@ from PyQt5.QtWidgets import (
     QComboBox, QLineEdit, QFormLayout
 )
 from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QIntValidator
+
 
 # 读取和保存位置到文件
 def load_positions():
@@ -38,6 +40,12 @@ class SerialCommunication(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout()
+
+        # 输入电机地址
+        self.motor_address_input = QLineEdit('1')  # 默认值为1
+        self.motor_address_input.setValidator(QIntValidator(1, 10))  # 限制输入范围为1到10
+        layout.addWidget(QLabel("电机地址："))
+        layout.addWidget(self.motor_address_input)
 
         # 输入进料位置和退料位置
         form_layout = QFormLayout()
@@ -75,12 +83,36 @@ class SerialCommunication(QWidget):
 
     def send_feed_command(self):
         feed_position = int(self.feed_position_input.text())
-        frame = [0x01, 0xFD, 0x01, 0x00, 0x50, 0x01, 0x00, 0x00, feed_position >> 8, feed_position & 0xFF, 0x01, 0x00, 0x6B]
+        motor_address = int(self.motor_address_input.text())  # 获取电机地址
+
+        # 假设 feed_position 需要变成 32 位，填充前两个字节并且将其拆分为高位和低位
+        high_byte = (feed_position >> 16) & 0xFFFF  # 获取高16位
+        low_byte = feed_position & 0xFFFF  # 获取低16位
+
+        # 更新 frame，确保高位和低位的计算
+        frame = [
+            motor_address, 0xFD, 0x01, 0x01, 0xF4, 0x00, 
+            (high_byte >> 8) & 0xFF, high_byte & 0xFF,  # 高位字节
+            (low_byte >> 8) & 0xFF, low_byte & 0xFF,  # 低位字节
+            0x01, 0x00, 0x6B
+        ]
         self.send_command(frame, "送料中")
 
     def send_unload_command(self):
         unload_position = int(self.unload_position_input.text())
-        frame = [0x01, 0xFD, 0x01, 0x00, 0x50, 0x01, 0x00, 0x00, unload_position >> 8, unload_position & 0xFF, 0x01, 0x00, 0x6B]
+        motor_address = int(self.motor_address_input.text())  # 获取电机地址
+
+        # 假设 unload_position 需要变成 32 位，填充前两个字节并且将其拆分为高位和低位
+        high_byte = (unload_position >> 16) & 0xFFFF  # 获取高16位
+        low_byte = unload_position & 0xFFFF  # 获取低16位
+
+        # 更新 frame，确保高位和低位的计算
+        frame = [
+            motor_address, 0xFD, 0x01, 0x01, 0xF4, 0x00, 
+            (high_byte >> 8) & 0xFF, high_byte & 0xFF,  # 高位字节
+            (low_byte >> 8) & 0xFF, low_byte & 0xFF,  # 低位字节
+            0x01, 0x00, 0x6B
+        ]
         self.send_command(frame, "退料中")
 
     def send_command(self, frame, action):
